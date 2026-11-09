@@ -1,0 +1,33 @@
+# GitHub Actions starter (complete the TODOs).
+name: ML quality gates
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # TODO C1: use actions/setup-python@v5 with Python 3.11.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: 3.11
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt
+      # WORKED EXAMPLE: ordinary code tests.
+      - name: Software tests
+        run: python -m pytest tests/test_software.py -v
+      # TODO C2: add a step that runs tests/test_data.py.
+      - name: Data tests
+        run: python -m pytest tests/test_data.py -v
+      # TODO C3: add a step that runs tests/test_model.py.
+      - name: Model tests
+        run: python -m pytest tests/test_model.py -v
+      # TODO C4: add a step that runs python run_checks.py.
+      - name: Run checks
+        run: python run_checks.py

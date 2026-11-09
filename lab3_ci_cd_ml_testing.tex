@@ -1,0 +1,108 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[margin=23mm]{geometry}
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{lmodern}
+\usepackage{hyperref}
+\usepackage{enumitem}
+\usepackage{xcolor}
+\usepackage{listings}
+\usepackage{microtype}
+\usepackage{fancyhdr}
+\usepackage{booktabs}
+\hypersetup{colorlinks=true,urlcolor=blue!60!black,linkcolor=blue!50!black}
+\definecolor{codebg}{RGB}{246,248,251}
+\lstset{basicstyle=\ttfamily\footnotesize,backgroundcolor=\color{codebg},frame=single,breaklines=true,columns=fullflexible,showstringspaces=false,keepspaces=true}
+\pagestyle{fancy}\fancyhf{}\lhead{Developing AI-enabled Systems}\rhead{Lab 3}\cfoot{\thepage}
+\setlist[itemize]{itemsep=2pt,topsep=3pt}
+\setlist[enumerate]{itemsep=3pt,topsep=3pt}
+\title{Lab 3: CI/CD and ML Testing\\\large GitHub Actions, Automated Testing, Data Validation, and Model Validation}
+\author{Department of Computing\\J\"onk\"oping University}
+\date{}
+\begin{document}
+\maketitle
+\vspace{-1.5em}
+\noindent\textbf{Format:} Optional and individual. No formal submission is required for this exercise. Approximate core duration: 2--3 hours; extensions: 1--2 additional hours. You may consult documentation and use AI assistance, but you should understand and be able to explain each check you implement.
+\section{Purpose}
+Unlike ordinary software, a working ML pipeline may accept invalid data or package a model with unacceptable predictive quality. You will complete a provided validation project, investigate deliberately broken data and a weak model, and configure GitHub Actions as a quality gate. The aim is not to optimize a medical predictor.
+\subsection*{Learning outcomes}
+After the lab, you should be able to (1) distinguish code, data, and model checks; (2) identify schema, missing-value, range, uniqueness, and label problems; (3) evaluate a held-out classifier using recall, F1, and a calibration-related metric; (4) reject an inadequate model using explicit thresholds; (5) identify illustrative data drift and inspect subgroup performance; (6) configure a CI pipeline; and (7) explain cross-validation, calibration, reproducibility, and the difference between CI and deployment.
+\section{Dataset and supplied files}
+The project uses the \href{https://scikit-learn.org/stable/modules/generated/sklearn.datasets.load_breast_cancer.html}{Wisconsin Diagnostic Breast Cancer dataset}, a \emph{real} published dataset (569 observations). Measurements were extracted from digitized cell images. The project selects five numeric features and remaps the label to \texttt{malignant=1} and \texttt{benign=0}. This is \textbf{only a teaching exercise}, not a medically validated system. You must not use its predictions for clinical decisions.
+\begin{itemize}
+\item \texttt{data/train.csv}, \texttt{data/evaluation.csv}: fixed, stratified split. The evaluation split is for this exercise, not repeated model optimization.
+\item \texttt{data/train\_faulty.csv}: intentionally modified training rows containing missing values, nonnumeric text, negative values, duplicate IDs, and an invalid target label.
+\item \texttt{data/evaluation\_shifted.csv}: artificial feature shift, only for drift detection.
+\item \texttt{models/candidate.joblib}, \texttt{models/weak.joblib}: \textbf{already trained}; no training or file downloads needed. \texttt{train\_models.py} shows how to reproduce them after validation works.
+\item \texttt{validation.py}, \texttt{model\_checks.py}, \texttt{tests/}, and \texttt{.github/workflows/ml-ci.yml}: starter code with marked TODOs.
+\item \texttt{optional\_extensions.py}, \texttt{serve\_model.py}, \texttt{Dockerfile}: advanced activities, with guidance.
+\end{itemize}
+\section{Part A: Explore and run the starter tests}
+Extract the archive, open a terminal in the project folder, and create a virtual environment:
+\begin{lstlisting}
+python -m venv .venv
+# macOS / Linux:
+source .venv/bin/activate
+# Windows PowerShell instead:
+# .venv\Scripts\Activate.ps1
+python -m pip install -r requirements.txt
+python -m pytest tests/test_software.py -v
+python -m pytest -v
+\end{lstlisting}
+The basic software tests should pass, but \emph{several ML-specific tests should fail initially}. These failures are intentional: you must complete the TODOs, not remove or weaken the tests. Inspect \texttt{ml\_config.py}, the datasets, and the test files. In \texttt{reflections.md}, record two examples of faults that a software smoke test would miss.
+\section{Part B: Data validation (D1--D6)}
+Open \texttt{validation.py}. The supplied \texttt{validate\_data(df)} function returns a list of problems (an empty list means valid). One check is already complete: it detects missing required columns. \textbf{Fill in D1--D5:}
+\begin{enumerate}
+\item D1: reject missing feature or target values; hint: \texttt{df.isna()}.
+\item D2: detect nonnumeric feature values without throwing an exception; hint: \texttt{pd.to\_numeric(series, errors='coerce')} converts invalid strings to NaN.
+\item D3: reject negative measurements; these five selected measurements are nonnegative by construction. Handle nonnumeric data safely before comparing.
+\item D4: detect duplicate \texttt{sample\_id} values; hint: \texttt{duplicated()}.
+\item D5: accept only labels 0 and 1 in \texttt{malignant}; hint: \texttt{isin([0,1])}.
+\end{enumerate}
+For example, \texttt{df['sample\_id'].duplicated().any()} returns \texttt{True} if at least one ID is repeated. Each problem should append a useful message to \texttt{problems}, not silently drop rows. Investigate \texttt{data/train\_faulty.csv} and write down which rules it violates (D6). Run:
+\begin{lstlisting}
+python -m pytest tests/test_data.py -v
+\end{lstlisting}
+The clean dataset should pass; the faulty dataset should be rejected. \textbf{Reflect:} Is imputing a missing value the same thing as validating data? Why should an invalid dataset stop a training pipeline?
+\section{Part C: Model validation (M1--M3)}
+Open \texttt{model\_checks.py}. The supplied function already calculates \emph{recall} for malignant cases. Add:
+\begin{enumerate}
+\item M1: the F1-score using \texttt{f1\_score(y, predictions)}.
+\item M2: the Brier score using \texttt{brier\_score\_loss(y, model.predict\_proba(X)[:, 1])}. A lower score is better; it evaluates predicted probabilities.
+\item M3: a quality gate requiring F1 $\geq 0.85$, recall $\geq 0.80$, and Brier $\leq 0.15$. These values are illustrative classroom criteria, not clinical standards.
+\end{enumerate}
+\noindent\textbf{Worked example:} \texttt{recall\_score(y, predictions)} measures $TP/(TP+FN)$. The F1-score is the harmonic mean $2PR/(P+R)$ of precision and recall. Examine why a majority-class predictor might have respectable accuracy but unacceptable F1 for the positive class. Run:
+\begin{lstlisting}
+python -m pytest tests/test_model.py -v
+python run_checks.py
+\end{lstlisting}
+You should see that \texttt{candidate.joblib} passes the model gate while \texttt{weak.joblib} fails it. No model training is required. In \texttt{reflections.md}, explain what each metric assesses and why one number is insufficient to claim a model is reliable.
+\section{Part D: Drift and subgroup performance (M4--M5)}
+\textbf{M4:} Implement \texttt{drift\_detected()} using an absolute difference in the mean of \texttt{mean radius} between two datasets. Use $>2.0$ as the exercise threshold. The supplied shifted dataset adds 8 to that feature. This is a \emph{simple heuristic}, not a statistical drift test, and neither drift nor a distribution change proves model accuracy declined.
+\textbf{M5:} Implement \texttt{subgroup\_recalls()} for samples below and at/above the evaluation set's median \texttt{mean radius}. Calculate recall separately for each subset. The provided \texttt{masks} dictionary already selects the rows. Inspect the number of positive cases per subgroup before interpreting the results. A subgroup with only a few positives has a very uncertain recall estimate.
+\textbf{Hints:} \texttt{df.loc[mask]} selects rows and \texttt{recall\_score(subset['malignant'], model.predict(subset[FEATURES]), zero\_division=0)} evaluates that slice.
+\section{Part E: Automate quality gates with GitHub Actions (C1--C4)}
+Create a GitHub repository for the project and inspect the starter workflow \texttt{.github/workflows/ml-ci.yml}. The checkout step, dependency installation, and software-test step are provided. Complete:
+\begin{enumerate}
+\item C1: add \texttt{actions/setup-python@v5} for Python 3.11.
+\item C2: add a step running \texttt{python -m pytest tests/test\_data.py -v}.
+\item C3: add a step running \texttt{python -m pytest tests/test\_model.py -v}.
+\item C4: add a step running \texttt{python run\_checks.py}.
+\end{enumerate}
+Example step syntax (already used in the file):
+\begin{lstlisting}
+- name: Software tests
+  run: python -m pytest tests/test_software.py -v
+\end{lstlisting}
+Push the feature branch, open a pull request, inspect the \emph{Actions/Checks} output, and review your own changes before merging. Try temporarily selecting \texttt{weak.joblib} in \texttt{run\_checks.py}, observe failure, then restore the candidate. \textbf{Do not merge a deliberately failing version.} Official guide: \url{https://docs.github.com/en/actions/tutorials/build-and-test-code/python}.
+\section{Part F: Further ML validation and deployment (extensions)}
+These activities are recommended to cover the broader topic but are optional if you have limited time.
+\begin{enumerate}
+\item \textbf{Cross-validation (E1):} The provided \texttt{StratifiedKFold(3, shuffle=True, random\_state=42)} creates three reproducible folds. Use \texttt{cross\_val\_score(..., scoring='f1')} and compare the fold scores. Fit the scaler \emph{inside} the pipeline to avoid leakage. Reference: \url{https://scikit-learn.org/stable/modules/cross_validation.html}.
+\item \textbf{Calibration (E2):} Use \texttt{calibration\_curve(y, probabilities, n\_bins=5)} to compare predicted probabilities with observed positive rates. Why is a well-ranked classifier not necessarily well-calibrated? Reference: \url{https://scikit-learn.org/stable/modules/calibration.html}.
+\item \textbf{Reproducibility:} Run \texttt{python train\_models.py} twice. Explain the purpose of fixed splits, random seeds, dependency versions, and saved model artifacts. Never load untrusted \texttt{joblib} files.
+\item \textbf{Docker deployment (E3--E4):} \texttt{serve\_model.py} provides a minimal Flask inference endpoint; complete the \texttt{Dockerfile}. Build with \texttt{docker build -t lab3-ml .} and run with \texttt{docker run --rm -p 5000:5000 lab3-ml}. Test \texttt{http://localhost:5000/health}. This introduces packaging, not clinical deployment or automated CD.
+\end{enumerate}
+\section{Conclusion}
+Write 150--250 words in \texttt{reflections.md}: explain a data-quality failure, a model-quality failure, what an automated gate prevents, why measured drift need not mean concept drift, and which additional evidence you would need before trusting an ML system in production. For this lab, passing tests means passing the \emph{defined teaching checks}, not proving medical safety or clinical validity.
+\end{document}
